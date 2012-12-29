@@ -1,0 +1,248 @@
+--- cut.c	2012-12-28 15:19:57.345985225 -0500
++++ src/cut.c	2012-12-28 16:55:51.906062821 -0500
+@@ -45,6 +45,22 @@
+   proper_name ("David MacKenzie"), \
+   proper_name ("Jim Meyering")
+ 
++/* When initializing an array to hold each line when using --preserve-order,
++   there must be a sentinel value that signifies that the next character added
++   to the array will be the first character in that field.  */
++#define CELL_SENTINEL '\0'
++
++/* This should be analogous to the problem of searching for an object by
++   starting at the origin and walking either toward infinity or toward negative
++   infinity. No matter how far you walk the first time, when you turn around,
++   you should walk to the other side of the origin twice as far as you went
++   in the first direction.  */
++#define ARRAY_SIZE_MULTIPLIER 2
++
++/* FIXME It's not clear what value to use for the initial array size when using
++   --preserve-order.  */
++#define INITIAL_ARRAY_SIZE 10
++
+ #define FATAL_ERROR(Message)						\
+   do									\
+     {									\
+@@ -148,6 +164,10 @@
+ /* True if we have ever read standard input. */
+ static bool have_read_stdin;
+ 
++/* Keep track of of the order of fields when using --preserve-order.  */
++static size_t *field_order;
++static bool preserve_field_order;
++
+ #define HT_RANGE_START_INDEX_INITIAL_CAPACITY 31
+ 
+ /* The set of range-start indices.  For example, given a range-spec list like
+@@ -213,6 +233,10 @@
+                             or fields\n\
+ "), stdout);
+       fputs (_("\
++  -p, --preserve-order    preserve the given field order such that,\n\
++                            e.g., -fi,j and -fj,i, give different results\n\
++"), stdout);
++      fputs (_("\
+   -s, --only-delimited    do not print lines not containing delimiters\n\
+       --output-delimiter=STRING  use STRING as the output delimiter\n\
+                             the default is to use the input delimiter\n\
+@@ -504,6 +528,33 @@
+ 
+   printable_field = xzalloc (max_range_endpoint / CHAR_BIT + 1);
+ 
++  /* Allocate an array to keep track of the fields necessary when using
++     --preserve-order.  */
++  field_order = (size_t *) xmalloc ((max_range_endpoint + 1) * sizeof (size_t));
++  memset (field_order, 0, (max_range_endpoint + 1) * sizeof (size_t));
++
++  /* pos will help key into field_order when using --preserve-order.  */
++  size_t pos = 0;
++
++  /* Set the field_order when using --preserve-order.  This must happen before
++     calling qsort on the ranges.  */
++  if (preserve_field_order) {
++    for (i = 0; i < n_rp; i++) {
++      size_t j = rp[i].lo;
++
++      if (j <= rp[i].hi && !is_printable_field(j)) {
++        /* Key into field_order. This is the start of the range.  */
++        ++pos;
++        field_order[pos] = j;
++      }
++      for (++j; j <= rp[i].hi; j++) {
++        /* Since this is a range, we look at the previous cell and increment.  */
++        ++pos;
++        field_order[pos] = field_order[j-1] + 1;
++      }
++    }
++  }
++
+   qsort (rp, n_rp, sizeof (rp[0]), compare_ranges);
+ 
+   /* Set the array entries corresponding to integers in the ranges of RP.  */
+@@ -516,11 +567,12 @@
+          index that is not part of any other (lo..hi] range.  */
+       rsi_candidate = complement ? rp[i].hi + 1 : rp[i].lo;
+       if (output_delimiter_specified
+-          && !is_printable_field (rsi_candidate))
++          && !is_printable_field (rsi_candidate)) {
+         mark_range_start (rsi_candidate);
+-
+-      for (j = rp[i].lo; j <= rp[i].hi; j++)
++      }
++      for (j = rp[i].lo; j <= rp[i].hi; j++) {
+         mark_printable_field (j);
++      }
+     }
+ 
+   if (output_delimiter_specified
+@@ -533,6 +585,30 @@
+   return field_found;
+ }
+ 
++/* Initialize an array that will hold the printable fields when using
++   --preserve-order with CELL_SENTINEL.  */
++static void
++initialize_array(char *** array, size_t prev_arraysize, size_t new_arraysize)
++{
++  size_t print_i;
++  for (print_i = prev_arraysize; print_i < new_arraysize; print_i++) {
++    char ** a = 0;
++    a = xmalloc( INITIAL_ARRAY_SIZE * sizeof(char **) );
++    a[0] = (char *) CELL_SENTINEL;
++    array[print_i] = a;
++  }
++}
++
++/* Initialize an array that will hold the printable fields when using
++   --preserve-order.  */
++static char ***
++alloc_array(char *** array, size_t size)
++{
++  array = xmalloc( size * sizeof(char **) );
++  initialize_array(array, 0, size);
++  return array;
++}
++
+ /* Read from stream STREAM, printing to standard output any selected bytes.  */
+ 
+ static void
+@@ -605,6 +681,14 @@
+      That is because a non-delimited line has exactly one field.  */
+   buffer_first_field = (suppress_non_delimited ^ !print_kth (1, NULL));
+ 
++  /* Keep track of the size of the array that we need and initialize the array
++     for --preserve-order.  */
++  size_t arraysize = INITIAL_ARRAY_SIZE;
++  char *** array = 0;
++  if (preserve_field_order) {
++    array = alloc_array(array, arraysize);
++  }
++
+   while (1)
+     {
+       if (field_idx == 1 && buffer_first_field)
+@@ -659,14 +743,46 @@
+             {
+               if (found_any_selected_field)
+                 {
++                  /* Write out the delimiter for --preserve-order.  */
++                  if (!preserve_field_order) {
+                   fwrite (output_delimiter_string, sizeof (char),
+                           output_delimiter_length, stdout);
++                  }
+                 }
+               found_any_selected_field = true;
+ 
+               while ((c = getc (stream)) != delim && c != '\n' && c != EOF)
+                 {
+-                  putchar (c);
++                  if (preserve_field_order) {
++                    /* Store the printable fields when using --preserve-order.  */
++                    size_t output_field_idx = 0;
++                    while (1) {
++                      if (field_order[output_field_idx] == field_idx) {
++                        break;
++                      }
++                      ++output_field_idx;
++                    }
++                    if ((output_field_idx + 1) >= arraysize) {
++                      size_t prev_arraysize = arraysize;
++                      while (arraysize < output_field_idx + 1) {
++                        arraysize *= ARRAY_SIZE_MULTIPLIER;
++                      }
++                      array = realloc(array, arraysize * sizeof(char **));
++                      initialize_array(array, prev_arraysize, arraysize);
++                    }
++                    if (array[output_field_idx][0] == CELL_SENTINEL) {
++                      array[output_field_idx][0] = (char *) c;
++                    } else {
++                      char tmp[2];
++                      tmp[0] = c;
++                      tmp[1] = '\0';
++                      //strcat(&array[output_field_idx][0], &tmp);
++                      strcat(array[output_field_idx], &tmp);
++                    }
++                  } else {
++                  /* Print the current char when not using --preserve-order.  */
++                    putchar (c);
++                  }
+                 }
+             }
+           else
+@@ -680,6 +796,24 @@
+ 
+       if (c == '\n')
+         {
++          /* Print the printable fields when using --preserve-order.  */
++          if (preserve_field_order) {
++            bool did_first = false;
++            size_t print_j = 0;
++            while (print_j < arraysize) {
++              if (print_kth(field_order[print_j], NULL)) {
++                if (did_first) {
++                  fwrite (output_delimiter_string, sizeof (char),
++                    output_delimiter_length, stdout);
++                }
++                printf (_("%s"), array[print_j]);
++                did_first = true;
++              }
++              ++print_j;
++            }
++            free (array);
++            array = alloc_array(array, arraysize);
++          }
+           c = getc (stream);
+           if (c != EOF)
+             {
+@@ -778,7 +912,7 @@
+   delim = '\0';
+   have_read_stdin = false;
+ 
+-  while ((optc = getopt_long (argc, argv, "b:c:d:f:ns", longopts, NULL)) != -1)
++  while ((optc = getopt_long (argc, argv, "b:c:d:f:nps", longopts, NULL)) != -1)
+     {
+       switch (optc)
+         {
+@@ -799,6 +933,11 @@
+           spec_list_string = optarg;
+           break;
+ 
++        case 'p':
++          /* Preserve field order. */
++          preserve_field_order = true;
++          break;
++
+         case 'd':
+           /* New delimiter. */
+           /* Interpret -d '' to mean 'use the NUL byte as the delimiter.'  */
+@@ -866,6 +1005,10 @@
+         FATAL_ERROR (_("missing list of positions"));
+     }
+ 
++  if (complement && preserve_field_order) {
++    FATAL_ERROR (_("--complement is incompatible with --preserve-order"));
++  }
++
+   if (!delim_specified)
+     delim = '\t';
+ 
