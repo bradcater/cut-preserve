@@ -43,3 +43,18 @@ Examples
 `echo "a,b,c" | cut -d"," -f2,3,1` > a,b,c
 
 `echo "a,b,c" | cut -d"," -f2,3,1 -p` > b,c,a
+
+How to Contribute
+=================
+
+* Fork the project on Github.
+* Create a topic branch for your changes.
+* Ensure that you provide test coverage for your changes.
+* Ensure that all tests pass.
+* Create a pull request on Github.
+
+TODO
+====
+
+* Add ordering support for byte and character selection.
+* Add tests.
