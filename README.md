@@ -44,17 +44,22 @@ Examples
 
 `echo "a,b,c" | cut -d"," -f2,3,1 -p` > b,c,a
 
+Tests
+-----
+
+`ruby test.rb`
+
 How to Contribute
 =================
 
-* Fork the project on Github.
+* Fork the project on GitHub.
 * Create a topic branch for your changes.
 * Ensure that you provide test coverage for your changes.
 * Ensure that all tests pass.
-* Create a pull request on Github.
+* Create a pull request on GitHub.
 
 TODO
 ====
 
 * Add ordering support for byte and character selection.
-* Add tests.
+* Add more tests.
