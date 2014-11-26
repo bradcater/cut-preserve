@@ -33,7 +33,7 @@ directory. You can test it by running
 to see whether or not the `--preserve-order` option is displayed in the help
 text. If so, then you are ready to try it out! I recommend moving it to
 somewhere on your PATH like `/usr/local/bin` since you probably don't want to
-overwrite `/usr/bin/cut` and you want your patched version to take precedence.
+overwrite `/usr/bin/cut`, and you want your patched version to take precedence.
 
 Examples
 --------
